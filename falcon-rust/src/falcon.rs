@@ -1,7 +1,9 @@
+use alloc::{vec, vec::Vec};
 use bit_vec::BitVec;
 use itertools::Itertools;
 use num_complex::{Complex, Complex64};
-use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
+use rand_chacha::ChaCha20Rng;
+use rand_core::{RngCore, SeedableRng};
 
 use crate::{
     encoding::{compress, decompress},
@@ -73,15 +75,6 @@ pub struct SecretKey<const N: usize> {
 }
 
 impl<const N: usize> SecretKey<N> {
-    /// Generate a secret key using randomness supplied by the operating system.
-    pub fn generate() -> Self {
-        // According to the docs [1], `thread_rng` uses entropy supplied
-        // by the operating system and ChaCha12 to extend it. So it is
-        // cryptographically secure, afaict.
-        // [1]: https://rust-random.github.io/rand/rand/rngs/struct.ThreadRng.html
-        Self::generate_from_seed(thread_rng().gen())
-    }
-
     /// Generate a secret key pseudorandomly by expanding a given seed.
     pub fn generate_from_seed(seed: [u8; 32]) -> Self {
         // separate sk gen for testing purposes
@@ -90,7 +83,7 @@ impl<const N: usize> SecretKey<N> {
     }
 
     pub(crate) fn gen_b0(seed: [u8; 32]) -> [Polynomial<i16>; 4] {
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let (f, g, capital_f, capital_g) = ntru_gen(N, &mut rng);
         [g, -f, capital_g, -capital_f]
     }
@@ -445,13 +438,17 @@ pub fn keygen<const N: usize>(seed: [u8; 32]) -> (SecretKey<N>, PublicKey<N>) {
     (sk, pk)
 }
 
-/// Sign a message with the secret key.
+/// Sign a message with the secret key using the provided RNG.
 ///
 /// Algorithm 10 of the specification [1, p.39].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
-pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
-    let mut rng = thread_rng();
+#[inline]
+pub fn sign_with_rng<const N: usize>(
+    m: &[u8],
+    sk: &SecretKey<N>,
+    mut rng: &mut impl RngCore,
+) -> Signature<N> {
     let mut r = [0u8; 40];
     rng.fill_bytes(&mut r);
 
@@ -475,9 +472,11 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
     let t0 = c_over_q_fft.hadamard_mul(&capital_f_fft);
     let t1 = -c_over_q_fft.hadamard_mul(&f_fft);
 
+    let bound_f64 = bound as f64;
+    let n_f64 = n as f64;
+    let sig_bytelen_minus_41 = params.sig_bytelen - 41;
+
     let s = loop {
-        let mut seed = [0u8; 32];
-        rng.fill_bytes(&mut seed);
         let bold_s = loop {
             let z = ffsampling(&(t0.clone(), t1.clone()), &sk.tree, &params, &mut rng);
             let t0_min_z0 = t0.clone() - z.0;
@@ -488,22 +487,18 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
             let s1 = t0_min_z0.hadamard_mul(&f_fft) + t1_min_z1.hadamard_mul(&capital_f_fft);
 
             // compute the norm of (s0||s1) and note that they are in FFT representation
-            let length_squared: f64 = (s0
-                .coefficients
-                .iter()
-                .map(|a| (a * a.conj()).re)
-                .sum::<f64>()
-                + s1.coefficients
-                    .iter()
-                    .map(|a| (a * a.conj()).re)
-                    .sum::<f64>())
-                / (n as f64);
-
-            if length_squared > (bound as f64) {
-                continue;
+            let mut length_squared: f64 = 0.0;
+            for a in s0.coefficients.iter() {
+                length_squared += (a * a.conj()).re;
             }
+            for a in s1.coefficients.iter() {
+                length_squared += (a * a.conj()).re;
+            }
+            length_squared /= n_f64;
 
-            break [s0, s1];
+            if length_squared <= bound_f64 {
+                break [s0, s1];
+            }
         };
         let s2 = bold_s[1].ifft();
         let maybe_s = compress(
@@ -511,17 +506,12 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
                 .iter()
                 .map(|a| a.re.round() as i16)
                 .collect_vec(),
-            params.sig_bytelen - 41,
+            sig_bytelen_minus_41,
         );
 
-        match maybe_s {
-            Some(s) => {
-                break s;
-            }
-            None => {
-                continue;
-            }
-        };
+        if let Some(s) = maybe_s {
+            break s;
+        }
     };
 
     Signature { r, s }
@@ -530,6 +520,7 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
 /// Verify a signature. Algorithm 16 in the spec [1, p.45].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[inline]
 pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -> bool {
     let n = N;
     let params = FalconVariant::from_n(N).parameters();
@@ -550,24 +541,29 @@ pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -
     let s1_ntt = c_ntt - s2_ntt.hadamard_mul(&h_ntt);
     let s1 = s1_ntt.ifft();
 
-    let length_squared = s1
-        .coefficients
-        .iter()
-        .map(|i| i.balanced_value() as i64)
-        .map(|i| (i * i))
-        .sum::<i64>()
-        + s2.iter().map(|&i| i as i64).map(|i| (i * i)).sum::<i64>();
+    let mut length_squared: i64 = 0;
+    for i in s1.coefficients.iter() {
+        let val = i.balanced_value() as i64;
+        length_squared += val * val;
+    }
+    for &i in s2.iter() {
+        let val = i as i64;
+        length_squared += val * val;
+    }
     length_squared < params.sig_bound
 }
 
 #[cfg(test)]
 mod test {
+    use alloc::vec;
     use itertools::Itertools;
-    use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
+    use rand::Rng;
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::{RngCore, SeedableRng};
 
     use crate::{
         encoding::compress,
-        falcon::{keygen, sign, verify, FalconVariant, Signature},
+        falcon::{keygen, sign_with_rng, verify, FalconVariant, Signature},
         falcon_field::Felt,
         polynomial::{hash_to_point, Polynomial},
     };
@@ -576,42 +572,35 @@ mod test {
 
     #[test]
     fn test_operation_falcon_512() {
-        let mut rng = thread_rng();
+        let seed = [0u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let mut msg = [0u8; 5];
         rng.fill_bytes(&mut msg);
 
-        println!("testing small scheme ...");
         const N: usize = 512;
-        println!("-> keygen ...");
-        let (sk, pk) = keygen::<N>(rng.gen());
-        println!("-> sign ...");
-        let sig = sign::<N>(&msg, &sk);
-        println!("-> verify ...");
+        let mut keygen_seed = [0u8; 32];
+        rng.fill_bytes(&mut keygen_seed);
+        let (sk, pk) = keygen::<N>(keygen_seed);
+        let sig = sign_with_rng::<N>(&msg, &sk, &mut rng);
         assert!(verify::<N>(&msg, &sig, &pk));
-        println!("-> ok.");
     }
 
     #[test]
     fn test_stalling_operation_falcon_1024() {
-        // let seed: [u8; 32] = [
-        //     119, 186, 1, 120, 0, 255, 165, 121, 56, 149, 105, 255, 53, 63, 192, 102, 231, 197, 233,
-        //     249, 212, 179, 1, 18, 33, 42, 137, 10, 172, 179, 168, 35,
-        // ];
-        let seed: [u8; 32] = thread_rng().gen();
-        println!("seed: {:2?}", seed);
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let seed: [u8; 32] = [
+            119, 186, 1, 120, 0, 255, 165, 121, 56, 149, 105, 255, 53, 63, 192, 102, 231, 197, 233,
+            249, 212, 179, 1, 18, 33, 42, 137, 10, 172, 179, 168, 35,
+        ];
+        let mut rng = ChaCha20Rng::from_seed(seed);
 
         let mut msg = [0u8; 5];
         rng.fill_bytes(&mut msg);
-        println!("testing big scheme ...");
         const N: usize = 1024;
-        println!("-> keygen ...");
-        let (sk, pk) = keygen::<N>(rng.gen());
-        println!("-> sign ...");
-        let sig = sign::<N>(&msg, &sk);
-        println!("-> verify ...");
+        let mut keygen_seed = [0u8; 32];
+        rng.fill_bytes(&mut keygen_seed);
+        let (sk, pk) = keygen::<N>(keygen_seed);
+        let sig = sign_with_rng::<N>(&msg, &sk, &mut rng);
         assert!(verify::<N>(&msg, &sig, &pk));
-        println!("-> ok.");
     }
 
     #[test]
@@ -1119,6 +1108,7 @@ mod test {
         assert!(verify::<1024>(&data, &sig, &pk));
     }
 
+    use alloc::vec::Vec;
     fn signature_vector(n: usize) -> Vec<i16> {
         match n {
             512 => vec![
@@ -1303,7 +1293,8 @@ mod test {
 
     #[test]
     fn test_secret_key_serialization() {
-        let sk = SecretKey::<512>::generate();
+        let seed = [1u8; 32];
+        let sk = SecretKey::<512>::generate_from_seed(seed);
         let serialized = sk.to_bytes();
         let deserialized = SecretKey::from_bytes(&serialized).unwrap();
         let reserialized = deserialized.to_bytes();
@@ -1314,7 +1305,8 @@ mod test {
 
     #[test]
     fn test_secret_key_serialization_fail() {
-        let sk = SecretKey::<512>::generate();
+        let seed = [2u8; 32];
+        let sk = SecretKey::<512>::generate_from_seed(seed);
         let mut serialized = sk.to_bytes();
         let len = serialized.len();
 
@@ -1335,7 +1327,8 @@ mod test {
 
     #[test]
     fn test_public_key_serialization() {
-        let pk = PublicKey::from_secret_key(&SecretKey::<512>::generate());
+        let seed = [3u8; 32];
+        let pk = PublicKey::from_secret_key(&SecretKey::<512>::generate_from_seed(seed));
         let serialized = pk.to_bytes();
         let deserialized = PublicKey::from_bytes(&serialized).unwrap();
         let reserialized = deserialized.to_bytes();
@@ -1346,7 +1339,8 @@ mod test {
 
     #[test]
     fn test_public_key_serialization_fail() {
-        let pk = PublicKey::from_secret_key(&SecretKey::<512>::generate());
+        let seed = [4u8; 32];
+        let pk = PublicKey::from_secret_key(&SecretKey::<512>::generate_from_seed(seed));
         let mut serialized = pk.to_bytes();
         let len = serialized.len();
 
@@ -1367,7 +1361,8 @@ mod test {
 
     #[test]
     fn test_secret_key_field_element_serialization() {
-        let mut rng = thread_rng();
+        let seed = [5u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         for polynomial_index in [0, 1, 2] {
             let width = SecretKey::<512>::field_element_width(512, polynomial_index);
             for _ in 0..100000 {

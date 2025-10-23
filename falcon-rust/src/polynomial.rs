@@ -1,9 +1,10 @@
+use alloc::vec::Vec;
+use core::default::Default;
+use core::fmt::{Debug, Display};
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num::{One, Zero};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::Shake256;
-use std::default::Default;
-use std::fmt::{Debug, Display};
-use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 
@@ -38,7 +39,7 @@ where
     #[allow(dead_code)]
     pub fn hermitian_adjoint(&self) -> Polynomial<F> {
         let coefficients = [
-            vec![self.coefficients[0].clone()],
+            alloc::vec![self.coefficients[0].clone()],
             self.coefficients
                 .iter()
                 .skip(1)
@@ -60,7 +61,7 @@ fn vector_karatsuba<
 ) -> Vec<F> {
     let n = left.len();
     if n <= 8 {
-        let mut product = vec![F::zero(); left.len() + right.len() - 1];
+        let mut product = alloc::vec![F::zero(); left.len() + right.len() - 1];
         for (i, l) in left.iter().enumerate() {
             for (j, r) in right.iter().enumerate() {
                 product[i + j] += l.clone() * r.clone();
@@ -69,7 +70,7 @@ fn vector_karatsuba<
         return product;
     }
     let n_over_2 = n / 2;
-    let mut product = vec![F::zero(); 2 * n - 1];
+    let mut product = alloc::vec![F::zero(); 2 * n - 1];
     let left_lo = &left[0..n_over_2];
     let right_lo = &right[0..n_over_2];
     let left_hi = &left[n_over_2..];
@@ -110,26 +111,30 @@ impl<
         F: Mul<Output = F> + Sub<Output = F> + AddAssign + Zero + Div<Output = F> + Inverse + Clone,
     > Polynomial<F>
 {
+    #[inline]
     pub fn hadamard_mul(&self, other: &Self) -> Self {
-        Polynomial::new(
-            self.coefficients
-                .iter()
-                .zip(other.coefficients.iter())
-                .map(|(a, b)| *a * *b)
-                .collect_vec(),
-        )
-    }
-    pub fn hadamard_div(&self, other: &Self) -> Self {
-        let other_coefficients_inverse = F::batch_inverse_or_zero(&other.coefficients);
-        Polynomial::new(
-            self.coefficients
-                .iter()
-                .zip(other_coefficients_inverse.iter())
-                .map(|(a, b)| *a * *b)
-                .collect_vec(),
-        )
+        let mut coefficients = Vec::with_capacity(self.coefficients.len());
+        for (a, b) in self.coefficients.iter().zip(other.coefficients.iter()) {
+            coefficients.push(*a * *b);
+        }
+        Polynomial::new(coefficients)
     }
 
+    #[inline]
+    pub fn hadamard_div(&self, other: &Self) -> Self {
+        let other_coefficients_inverse = F::batch_inverse_or_zero(&other.coefficients);
+        let mut coefficients = Vec::with_capacity(self.coefficients.len());
+        for (a, b) in self
+            .coefficients
+            .iter()
+            .zip(other_coefficients_inverse.iter())
+        {
+            coefficients.push(*a * *b);
+        }
+        Polynomial::new(coefficients)
+    }
+
+    #[inline]
     pub fn hadamard_inv(&self) -> Self {
         let coefficients_inverse = F::batch_inverse_or_zero(&self.coefficients);
         Polynomial::new(coefficients_inverse)
@@ -171,13 +176,13 @@ impl<F: Zero + PartialEq + Clone> Polynomial<F> {
 impl<F: Zero + Clone> Polynomial<F> {
     pub fn shift(&self, shamt: usize) -> Self {
         Self {
-            coefficients: [vec![F::zero(); shamt], self.coefficients.clone()].concat(),
+            coefficients: [alloc::vec![F::zero(); shamt], self.coefficients.clone()].concat(),
         }
     }
 
     pub fn constant(f: F) -> Self {
         Self {
-            coefficients: vec![f],
+            coefficients: alloc::vec![f],
         }
     }
 
@@ -201,7 +206,7 @@ impl<
 {
     /// Reduce the polynomial by X^n + 1.
     pub fn reduce_by_cyclotomic(&self, n: usize) -> Self {
-        let mut coefficients = vec![F::zero(); n];
+        let mut coefficients = alloc::vec![F::zero(); n];
         let mut sign = -F::one();
         for (i, c) in self.coefficients.iter().cloned().enumerate() {
             if i % n == 0 {
@@ -233,7 +238,7 @@ impl<
     /// This function assumes that F is a field; otherwise the gcd will never end.
     #[allow(dead_code)]
     pub(crate) fn cyclotomic_ring_inverse(&self, n: usize) -> Self {
-        let mut cyclotomic_coefficients = vec![F::zero(); n + 1];
+        let mut cyclotomic_coefficients = alloc::vec![F::zero(); n + 1];
         cyclotomic_coefficients[0] = F::one();
         cyclotomic_coefficients[n] = F::one();
         let (_, a, _) = Polynomial::xgcd(self, &Polynomial::new(cyclotomic_coefficients));
@@ -249,8 +254,8 @@ impl<
     /// [1]: https://falcon-sign.info/falcon.pdf
     pub fn field_norm(&self) -> Self {
         let n = self.coefficients.len();
-        let mut f0_coefficients = vec![F::zero(); n / 2];
-        let mut f1_coefficients = vec![F::zero(); n / 2];
+        let mut f0_coefficients = alloc::vec![F::zero(); n / 2];
+        let mut f1_coefficients = alloc::vec![F::zero(); n / 2];
         for i in 0..n / 2 {
             f0_coefficients[i] = self.coefficients[2 * i].clone();
             f1_coefficients[i] = self.coefficients[2 * i + 1].clone();
@@ -259,7 +264,7 @@ impl<
         let f1 = Polynomial::new(f1_coefficients);
         let f0_squared = (f0.clone() * f0).reduce_by_cyclotomic(n / 2);
         let f1_squared = (f1.clone() * f1).reduce_by_cyclotomic(n / 2);
-        let x = Polynomial::new(vec![F::zero(), F::one()]);
+        let x = Polynomial::new(alloc::vec![F::zero(), F::one()]);
         f0_squared - (x * f1_squared).reduce_by_cyclotomic(n / 2)
     }
 
@@ -267,7 +272,7 @@ impl<
     /// size. Do this by interleaving zeros.
     pub fn lift_next_cyclotomic(&self) -> Self {
         let n = self.coefficients.len();
-        let mut coefficients = vec![F::zero(); n * 2];
+        let mut coefficients = alloc::vec![F::zero(); n * 2];
         for i in 0..n {
             coefficients[2 * i] = self.coefficients[i].clone();
         }
@@ -496,7 +501,7 @@ where
             return Polynomial::<F>::zero();
         }
         let mut coefficients =
-            vec![F::zero(); self.coefficients.len() + other.coefficients.len() - 1];
+            alloc::vec![F::zero(); self.coefficients.len() + other.coefficients.len() - 1];
         for i in 0..self.coefficients.len() {
             for j in 0..other.coefficients.len() {
                 coefficients[i + j] += self.coefficients[i].clone() * other.coefficients[j].clone();
@@ -517,7 +522,7 @@ where
             return Self::zero();
         }
         let mut coefficients =
-            vec![F::zero(); self.coefficients.len() + other.coefficients.len() - 1];
+            alloc::vec![F::zero(); self.coefficients.len() + other.coefficients.len() - 1];
         for i in 0..self.coefficients.len() {
             for j in 0..other.coefficients.len() {
                 coefficients[i + j] += self.coefficients[i].clone() * other.coefficients[j].clone();
@@ -561,7 +566,7 @@ where
 {
     fn one() -> Self {
         Self {
-            coefficients: vec![F::one()],
+            coefficients: alloc::vec![F::one()],
         }
     }
 }
@@ -572,7 +577,7 @@ where
 {
     fn zero() -> Self {
         Self {
-            coefficients: vec![],
+            coefficients: alloc::vec![],
         }
     }
 
@@ -628,7 +633,7 @@ pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
     hasher.update(string);
     let mut reader = hasher.finalize_xof();
 
-    let mut coefficients: Vec<Felt> = vec![];
+    let mut coefficients: Vec<Felt> = alloc::vec![];
     while coefficients.len() != n {
         let mut randomness = [0u8; 2];
         reader.read(&mut randomness);
@@ -643,7 +648,7 @@ pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
 }
 
 impl<T: Display> Display for Polynomial<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "[{}]", self.coefficients.iter().join(", "))
     }
 }

@@ -1,4 +1,4 @@
-//! Unofficial rust implementation of the [Falcon] post-quantum
+//! Unofficial no-std rust implementation of the [Falcon] post-quantum
 //! digital signature scheme.
 //!
 //! Falcon was submitted to the [NIST PQC]
@@ -19,33 +19,35 @@
 //! [specification]: https://falcon-sign.info/falcon.pdf
 //! [python implementation]: https://github.com/tprest/falcon.py
 //!
-//! # Usage
+//! # Usage (no-std with custom RNG)
 //!
-//! First, `falcon-rust = "0.1.2"` to your `Cargo.toml` file.
+//! This crate is designed for embedded devices like STM32 microcontrollers.
+//! You must provide your own RNG implementation via `rand_core::RngCore`.
 //!
-//! Then to use the interface:
-//! ```
+//! ```ignore
 //! use falcon_rust::falcon512;
+//! use rand_core::RngCore;
 //!
-//! use rand::thread_rng;
-//! use rand::Rng;
+//! // Your device's RNG implementation (e.g., STM32 hardware RNG)
+//! let mut rng = your_device_rng();
+//! let mut seed = [0u8; 32];
+//! rng.fill_bytes(&mut seed);
 //!
 //! let msg = b"Hello, world!";
-//! let (sk, pk) = falcon512::keygen(thread_rng().gen());
-//! let sig = falcon512::sign(msg, &sk);
+//! let (sk, pk) = falcon512::keygen(seed);
+//! let sig = falcon512::sign_with_rng(msg, &sk, &mut rng);
 //! assert!(falcon512::verify(msg, &sig, &pk));
 //! ```
 //!
 //! For serialization / deserialization:
-//! ```
+//! ```ignore
 //! use falcon_rust::falcon512;
 //!
-//! use rand::thread_rng;
-//! use rand::Rng;
-//!
 //! let msg = b"Hello, world!";
-//! let (sk, pk) = falcon512::keygen(thread_rng().gen());
-//! let sig = falcon512::sign(msg, &sk);
+//! let seed = [0u8; 32]; // Use proper randomness in production
+//! let (sk, pk) = falcon512::keygen(seed);
+//! let mut rng = your_device_rng();
+//! let sig = falcon512::sign_with_rng(msg, &sk, &mut rng);
 //!
 //! let sk_buffer = sk.to_bytes();
 //! let pk_buffer = pk.to_bytes();
@@ -54,6 +56,13 @@
 //! falcon512::PublicKey::from_bytes(&pk_buffer);
 //! falcon512::Signature::from_bytes(&sig_buffer);
 //! ```
+
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+#[cfg(test)]
+extern crate std;
 
 pub(crate) mod cyclotomic_fourier;
 pub(crate) mod encoding;

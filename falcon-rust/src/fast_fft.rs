@@ -1,4 +1,4 @@
-use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 use num::{One, Zero};
@@ -5318,6 +5318,7 @@ impl FastFft for Polynomial<U32Field> {
 
 #[cfg(test)]
 mod test {
+    use alloc::{format, vec};
     use itertools::Itertools;
     use num::One;
 

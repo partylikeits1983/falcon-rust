@@ -1,6 +1,7 @@
+use alloc::boxed::Box;
+use num::{One, Zero};
 use num_complex::{Complex, Complex64};
-use rand::RngCore;
-use rand_distr::num_traits::{One, Zero};
+use rand_core::RngCore;
 
 use crate::{falcon, fast_fft::FastFft, polynomial::Polynomial, samplerz::sampler_z};
 
@@ -117,8 +118,8 @@ pub(crate) fn ffsampling(
             let z0 = sampler_z(t.0.coefficients[0].re, value[0].re, parameters.sigmin, rng);
             let z1 = sampler_z(t.1.coefficients[0].re, value[0].re, parameters.sigmin, rng);
             (
-                Polynomial::new(vec![Complex64::new(z0 as f64, 0.0)]),
-                Polynomial::new(vec![Complex64::new(z1 as f64, 0.0)]),
+                Polynomial::new(alloc::vec![Complex64::new(z0 as f64, 0.0)]),
+                Polynomial::new(alloc::vec![Complex64::new(z1 as f64, 0.0)]),
             )
         }
     }
@@ -127,9 +128,9 @@ pub(crate) fn ffsampling(
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
+    use num::Zero;
     use num_complex::{Complex, Complex64};
     use rand::{thread_rng, Rng};
-    use rand_distr::num_traits::Zero;
 
     use crate::{ffsampling::gram, polynomial::Polynomial};
 

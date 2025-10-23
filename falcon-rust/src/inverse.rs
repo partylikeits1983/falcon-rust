@@ -1,4 +1,5 @@
-use std::ops::MulAssign;
+use alloc::vec::Vec;
+use core::ops::MulAssign;
 
 use itertools::Itertools;
 use num::{One, Zero};

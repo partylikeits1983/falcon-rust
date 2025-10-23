@@ -1,4 +1,5 @@
-use std::{
+use alloc::vec::Vec;
+use core::{
     f64::consts::PI,
     ops::{Add, Mul, MulAssign, Sub},
 };
@@ -43,7 +44,7 @@ where
     /// bit-reversed order.
     fn bitreversed_powers(n: usize) -> Vec<Self> {
         let psi = Self::primitive_root_of_unity(2 * n);
-        let mut array = vec![Self::zero(); n];
+        let mut array = alloc::vec![Self::zero(); n];
         let mut alpha = Self::one();
         for a in array.iter_mut() {
             *a = alpha;
@@ -57,7 +58,7 @@ where
     /// put them in bit-reversed order.
     fn bitreversed_powers_inverse(n: usize) -> Vec<Self> {
         let psi = Self::primitive_root_of_unity(2 * n).inverse_or_zero();
-        let mut array = vec![Self::zero(); n];
+        let mut array = alloc::vec![Self::zero(); n];
         let mut alpha = Self::one();
         for a in array.iter_mut() {
             *a = alpha;
@@ -98,6 +99,7 @@ where
     ///    trait implementation is not const. For the performance benefit
     ///    you want a precompiled array, which you can get if you can get
     ///    by implementing the same method and marking it "const".
+    #[inline]
     fn fft(a: &mut [Self], psi_rev: &[Self]) {
         let n = a.len();
         let mut t = n;
@@ -109,10 +111,13 @@ where
                 let j2 = j1 + t - 1;
                 let s = psi_rev[m + i];
                 for j in j1..=j2 {
-                    let u = a[j];
-                    let v = a[j + t] * s;
-                    a[j] = u + v;
-                    a[j + t] = u - v;
+                    // SAFETY: j and j+t are within bounds by loop construction
+                    unsafe {
+                        let u = *a.get_unchecked(j);
+                        let v = *a.get_unchecked(j + t) * s;
+                        *a.get_unchecked_mut(j) = u + v;
+                        *a.get_unchecked_mut(j + t) = u - v;
+                    }
                 }
             }
             m <<= 1;
@@ -139,6 +144,7 @@ where
     ///    the performance benefit you want a precompiled array, which you
     ///    can get if you can get by implementing the same methods and marking
     ///    them "const".
+    #[inline]
     fn ifft(a: &mut [Self], psi_inv_rev: &[Self], ninv: Self) {
         let n = a.len();
         let mut t = 1;
@@ -150,10 +156,13 @@ where
                 let j2 = j1 + t - 1;
                 let s = psi_inv_rev[h + i];
                 for j in j1..=j2 {
-                    let u = a[j];
-                    let v = a[j + t];
-                    a[j] = u + v;
-                    a[j + t] = (u - v) * s;
+                    // SAFETY: j and j+t are within bounds by loop construction
+                    unsafe {
+                        let u = *a.get_unchecked(j);
+                        let v = *a.get_unchecked(j + t);
+                        *a.get_unchecked_mut(j) = u + v;
+                        *a.get_unchecked_mut(j + t) = (u - v) * s;
+                    }
                 }
                 j1 += 2 * t;
             }
@@ -165,28 +174,37 @@ where
         }
     }
 
+    #[inline]
     fn split_fft(f: &[Self], psi_inv_rev: &[Self]) -> (Vec<Self>, Vec<Self>) {
         let n_over_2 = f.len() / 2;
-        let mut f0 = vec![Self::zero(); n_over_2];
-        let mut f1 = vec![Self::zero(); n_over_2];
+        let mut f0 = alloc::vec![Self::zero(); n_over_2];
+        let mut f1 = alloc::vec![Self::zero(); n_over_2];
         let two_inv = (Self::one() + Self::one()).inverse_or_zero();
         for i in 0..n_over_2 {
             let two_i = i * 2;
             let two_zeta_inv = two_inv * psi_inv_rev[n_over_2 + i];
-            f0[i] = two_inv * (f[two_i] + f[two_i + 1]);
-            f1[i] = two_zeta_inv * (f[two_i] - f[two_i + 1]);
+            // SAFETY: two_i and two_i+1 are within bounds
+            unsafe {
+                f0[i] = two_inv * (*f.get_unchecked(two_i) + *f.get_unchecked(two_i + 1));
+                f1[i] = two_zeta_inv * (*f.get_unchecked(two_i) - *f.get_unchecked(two_i + 1));
+            }
         }
         (f0, f1)
     }
 
+    #[inline]
     fn merge_fft(f0: &[Self], f1: &[Self], psi_rev: &[Self]) -> Vec<Self> {
         let n_over_2 = f0.len();
         let n = 2 * n_over_2;
-        let mut f = vec![Self::zero(); n];
+        let mut f = alloc::vec![Self::zero(); n];
         for i in 0..n_over_2 {
             let two_i = i * 2;
-            f[two_i] = f0[i] + psi_rev[n_over_2 + i] * f1[i];
-            f[two_i + 1] = f0[i] - psi_rev[n_over_2 + i] * f1[i];
+            let psi_f1 = psi_rev[n_over_2 + i] * f1[i];
+            // SAFETY: two_i and two_i+1 are within bounds
+            unsafe {
+                *f.get_unchecked_mut(two_i) = f0[i] + psi_f1;
+                *f.get_unchecked_mut(two_i + 1) = f0[i] - psi_f1;
+            }
         }
         f
     }
@@ -201,7 +219,7 @@ impl CyclotomicFourier for Complex64 {
     /// Custom implementation of CyclotomicFourier::bitreversed_powers for
     /// better precision.
     fn bitreversed_powers(n: usize) -> Vec<Self> {
-        let mut array = vec![Self::zero(); n];
+        let mut array = alloc::vec![Self::zero(); n];
         let half_circle = PI;
         for (i, a) in array.iter_mut().enumerate() {
             let angle = (i as f64) * half_circle / (n as f64);
@@ -214,7 +232,7 @@ impl CyclotomicFourier for Complex64 {
     /// Custom implementation of CyclotomicFourier::bitreversed_powers_inverse
     /// for better precision.
     fn bitreversed_powers_inverse(n: usize) -> Vec<Self> {
-        let mut array = vec![Self::zero(); n];
+        let mut array = alloc::vec![Self::zero(); n];
         let half_circle = PI;
         for (i, a) in array.iter_mut().enumerate() {
             let angle = (i as f64) * half_circle / (n as f64);
@@ -229,6 +247,7 @@ impl CyclotomicFourier for Complex64 {
 mod test {
     use crate::inverse::Inverse;
     use crate::{cyclotomic_fourier::CyclotomicFourier, polynomial::Polynomial};
+    use alloc::vec;
     use itertools::Itertools;
     use num::One;
     use num_complex::Complex64;
@@ -249,10 +268,12 @@ mod test {
             let n = 1 << log2n;
             let mut z = Complex64::primitive_root_of_unity(n);
             for _ in 0..log2n {
-                assert!((z - Complex64::one()).norm() > f32::EPSILON as f64);
+                let diff = z - Complex64::one();
+                assert!((diff.re * diff.re + diff.im * diff.im).sqrt() > f32::EPSILON as f64);
                 z *= z;
             }
-            assert!((z - Complex64::one()).norm() < f32::EPSILON as f64);
+            let diff = z - Complex64::one();
+            assert!((diff.re * diff.re + diff.im * diff.im).sqrt() < f32::EPSILON as f64);
         }
     }
 

@@ -1,10 +1,6 @@
-use std::fmt::Display;
-use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-
-use rand_distr::{
-    num_traits::{One, Zero},
-    Distribution, Standard,
-};
+use core::fmt::Display;
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use num::{One, Zero};
 
 use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
@@ -16,6 +12,7 @@ pub(crate) const Q: u32 = 12 * 1024 + 1;
 pub(crate) struct Felt(u32);
 
 impl Felt {
+    #[inline(always)]
     pub const fn new(value: i16) -> Self {
         let gtz_bool = value >= 0;
         let gtz_int = gtz_bool as i16;
@@ -25,16 +22,19 @@ impl Felt {
         Felt(canonical_representative)
     }
 
+    #[inline(always)]
     pub const fn value(&self) -> i16 {
         self.0 as i16
     }
 
+    #[inline(always)]
     pub fn balanced_value(&self) -> i16 {
         let value = self.value();
         let g = (value > ((Q as i16) / 2)) as i16;
         value - (Q as i16) * g
     }
 
+    #[inline(always)]
     pub const fn multiply(&self, other: Self) -> Self {
         Felt((self.0 * other.0) % Q)
     }
@@ -48,6 +48,7 @@ impl From<usize> for Felt {
 
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl Add for Felt {
+    #[inline(always)]
     fn add(self, rhs: Self) -> Self::Output {
         let (s, _) = self.0.overflowing_add(rhs.0);
         let (d, n) = s.overflowing_sub(Q);
@@ -59,6 +60,7 @@ impl Add for Felt {
 }
 
 impl AddAssign for Felt {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
@@ -67,12 +69,14 @@ impl AddAssign for Felt {
 impl Sub for Felt {
     type Output = Self;
 
+    #[inline(always)]
     fn sub(self, rhs: Self) -> Self::Output {
         self + -rhs
     }
 }
 
 impl SubAssign for Felt {
+    #[inline(always)]
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
@@ -81,6 +85,7 @@ impl SubAssign for Felt {
 impl Neg for Felt {
     type Output = Felt;
 
+    #[inline(always)]
     fn neg(self) -> Self::Output {
         let is_nonzero = self.0 != 0;
         let r = Q - self.0;
@@ -89,6 +94,7 @@ impl Neg for Felt {
 }
 
 impl Mul for Felt {
+    #[inline(always)]
     fn mul(self, rhs: Self) -> Self::Output {
         Felt((self.0 * rhs.0) % Q)
     }
@@ -97,6 +103,7 @@ impl Mul for Felt {
 }
 
 impl MulAssign for Felt {
+    #[inline(always)]
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
@@ -117,19 +124,14 @@ impl One for Felt {
     }
 }
 
-impl Distribution<Felt> for Standard {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Felt {
-        Felt::new(((rng.next_u32() >> 1) % Q) as i16)
-    }
-}
-
 impl Display for Felt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.value()))
     }
 }
 
 impl Inverse for Felt {
+    #[inline]
     fn inverse_or_zero(self) -> Self {
         // q-2 = 0b10 11 11 11  11 11 11
         let two = self.multiply(self);
@@ -185,9 +187,11 @@ impl CyclotomicFourier for Felt {
 
 #[cfg(test)]
 mod test {
+    use alloc::vec;
     use itertools::Itertools;
-    use num::One;
-    use rand::{thread_rng, Rng, RngCore};
+    use num::{One, Zero};
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::{RngCore, SeedableRng};
 
     use crate::{
         cyclotomic_fourier::CyclotomicFourier,
@@ -195,11 +199,11 @@ mod test {
         inverse::Inverse,
         polynomial::Polynomial,
     };
-    use num::Zero;
 
     #[test]
     fn test_value() {
-        let mut rng = thread_rng();
+        let seed = [0u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         for _ in 0..1000 {
             let mut value = (rng.next_u32() & 0x3fff) as i16;
             if rng.next_u32() % 2 == 1 {
@@ -217,7 +221,8 @@ mod test {
 
     #[test]
     fn test_add() {
-        let mut rng = thread_rng();
+        let seed = [1u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let a_value = (rng.next_u32() % 0x0fff) as i16;
         let b_value = (rng.next_u32() % 0x0fff) as i16;
         let a = Felt::new(a_value);
@@ -239,7 +244,8 @@ mod test {
 
     #[test]
     fn test_mul() {
-        let mut rng = thread_rng();
+        let seed = [2u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         for _ in 0..1000 {
             let a_value = (rng.next_u32() % 0x3fff) as i16;
             let b_value = (rng.next_u32() % 0x3fff) as i16;
@@ -258,8 +264,13 @@ mod test {
 
     #[test]
     fn test_batch_inverse() {
-        let mut rng = thread_rng();
-        let a: [Felt; 64] = (0..64).map(|_| rng.gen()).collect_vec().try_into().unwrap();
+        let seed = [3u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
+        let a: [Felt; 64] = (0..64)
+            .map(|_| Felt::new((rng.next_u32() % Q) as i16))
+            .collect_vec()
+            .try_into()
+            .unwrap();
         let b_batch = Felt::batch_inverse_or_zero(&a);
         let b_regular = a.iter().map(|e| e.inverse_or_zero()).collect_vec();
         assert_eq!(b_batch.to_vec(), b_regular);
@@ -267,8 +278,9 @@ mod test {
 
     #[test]
     fn test_inverse() {
-        let mut rng = thread_rng();
-        let a: Felt = rng.gen();
+        let seed = [4u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
+        let a: Felt = Felt::new((rng.next_u32() % Q) as i16);
         let b = a.inverse_or_zero();
 
         assert_eq!(a * b * a, a);
@@ -307,7 +319,8 @@ mod test {
     #[test]
     fn test_ntt() {
         let n = 32;
-        let mut rng = thread_rng();
+        let seed = [5u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let mut a = (0..n)
             .map(|_| rng.next_u32() as i16)
             .map(Felt::new)
@@ -346,12 +359,13 @@ mod test {
     #[test]
     fn test_multiply_reduce() {
         let n = 32;
-        let mut rng = thread_rng();
+        let seed = [6u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let mut a = (0..n)
-            .map(|_| Felt::new(rng.gen_range(-20..20)))
+            .map(|_| Felt::new(((rng.next_u32() % 41) as i16) - 20))
             .collect_vec();
         let mut b = (0..n)
-            .map(|_| Felt::new(rng.gen_range(-20..20)))
+            .map(|_| Felt::new(((rng.next_u32() % 41) as i16) - 20))
             .collect_vec();
 
         let c = (Polynomial::new(a.clone()) * Polynomial::new(b.clone()))

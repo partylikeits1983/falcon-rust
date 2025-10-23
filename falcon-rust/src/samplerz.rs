@@ -1,10 +1,11 @@
-use std::f64::consts::LN_2;
+use core::f64::consts::LN_2;
 
-use rand::{Rng, RngCore};
+use rand_core::RngCore;
 
 /// Sample an integer from {0, ..., 18} according to the distribution χ, which
 /// is close to the half-Gaussian distribution on the natural numbers with mean
 /// 0 and standard deviation equal to sigma_max.
+#[inline(always)]
 fn base_sampler(bytes: [u8; 9]) -> i16 {
     const RCDT: [u128; 18] = [
         3024686241123004913666,
@@ -26,11 +27,23 @@ fn base_sampler(bytes: [u8; 9]) -> i16 {
         198,
         1,
     ];
-    let u = u128::from_be_bytes([vec![0u8; 7], bytes.to_vec()].concat().try_into().unwrap());
-    RCDT.into_iter().filter(|r| u < *r).count() as i16
+    // Optimize: avoid allocation by building array directly
+    let mut u_bytes = [0u8; 16];
+    u_bytes[7..].copy_from_slice(&bytes);
+    let u = u128::from_be_bytes(u_bytes);
+
+    // Optimize: manual loop is faster than iterator chain
+    let mut count = 0i16;
+    for r in &RCDT {
+        if u < *r {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Compute an integer approximation of 2^63 * ccs * exp(-x).
+#[inline(always)]
 fn approx_exp(x: f64, ccs: f64) -> u64 {
     // The constants C are used to approximate exp(-x); these
     // constants are taken from FACCT (up to a scaling factor
@@ -70,6 +83,7 @@ fn approx_exp(x: f64, ccs: f64) -> u64 {
 }
 
 /// A random bool that is true with probability ≈ ccs · exp(−x).
+#[inline(always)]
 fn ber_exp(x: f64, ccs: f64, random_bytes: [u8; 7]) -> bool {
     // 0.69314718055994530941 = ln(2)
     let s = f64::floor(x / LN_2) as usize;
@@ -89,6 +103,7 @@ fn ber_exp(x: f64, ccs: f64, random_bytes: [u8; 7]) -> bool {
 
 /// Sample an integer from the Gaussian distribution with given mean (mu) and
 /// standard deviation (sigma).
+#[inline]
 pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, rng: &mut dyn RngCore) -> i16 {
     const SIGMA_MAX: f64 = 1.8205;
     const INV_2SIGMA_MAX_SQ: f64 = 1f64 / (2f64 * SIGMA_MAX * SIGMA_MAX);
@@ -98,14 +113,20 @@ pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, rng: &mut dyn RngCo
     let r = mu - s;
     let ccs = sigma_min * isigma;
     loop {
-        let z0 = base_sampler(rng.gen());
-        let random_byte: u8 = rng.gen();
+        let mut bytes_9 = [0u8; 9];
+        rng.fill_bytes(&mut bytes_9);
+        let z0 = base_sampler(bytes_9);
+
+        let random_byte: u8 = (rng.next_u32() & 0xFF) as u8;
         let b = (random_byte & 1) as i16;
         let z = b + ((b << 1) - 1) * z0;
         let zf_min_r = (z as f64) - r;
         //    x = ((z-r)^2)/(2*sigma^2) - ((z-b)^2)/(2*sigma0^2)
         let x = zf_min_r * zf_min_r * dss - (z0 * z0) as f64 * INV_2SIGMA_MAX_SQ;
-        if ber_exp(x, ccs, rng.gen()) {
+
+        let mut bytes_7 = [0u8; 7];
+        rng.fill_bytes(&mut bytes_7);
+        if ber_exp(x, ccs, bytes_7) {
             return z + (s as i16);
         }
     }
@@ -113,10 +134,10 @@ pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, rng: &mut dyn RngCo
 
 #[cfg(test)]
 mod test {
+    use alloc::{vec, vec::Vec};
     use itertools::Itertools;
-    use rand::Rng;
-    use rand::{thread_rng, RngCore};
-    use std::{thread::sleep, time::Duration};
+
+    use rand_core::RngCore;
 
     use crate::samplerz::{approx_exp, ber_exp, sampler_z};
 
@@ -139,7 +160,7 @@ mod test {
         fn next(&mut self) -> u8 {
             if self.buffer.len() <= self.index {
                 // panic!("Ran out of buffer.");
-                sleep(Duration::from_millis(10));
+                // sleep removed for no-std
                 0u8
             } else {
                 let return_value = self.buffer[self.index];
@@ -149,7 +170,7 @@ mod test {
         }
     }
 
-    impl RngCore for UnsafeBufferRng {
+    impl rand_core::RngCore for UnsafeBufferRng {
         fn next_u32(&mut self) -> u32 {
             // let bytes: [u8; 4] = (0..4)
             //     .map(|_| self.next())
@@ -176,7 +197,7 @@ mod test {
             }
         }
 
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
             for d in dest.iter_mut() {
                 *d = self.next();
             }
@@ -310,7 +331,11 @@ mod test {
 
     #[test]
     fn endianness() {
-        let bytes: [u8; 9] = thread_rng().gen();
+        use rand_chacha::ChaCha20Rng;
+        use rand_core::SeedableRng;
+        let mut rng = ChaCha20Rng::from_seed([0u8; 32]);
+        let mut bytes = [0u8; 9];
+        rng.fill_bytes(&mut bytes);
         let u0 = u128::from_le_bytes(
             [bytes.into_iter().rev().collect_vec(), vec![0u8; 7]]
                 .concat()

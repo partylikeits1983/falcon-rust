@@ -1,9 +1,10 @@
-use std::vec::IntoIter;
+use alloc::vec;
+use alloc::vec::IntoIter;
 
 use itertools::Itertools;
 use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
-use rand::RngCore;
+use rand_core::RngCore;
 
 use crate::{
     cyclotomic_fourier::CyclotomicFourier,
@@ -32,7 +33,7 @@ pub fn babai_reduce_bigint(
     g: &Polynomial<BigInt>,
     capital_f: &mut Polynomial<BigInt>,
     capital_g: &mut Polynomial<BigInt>,
-) -> Result<(), String> {
+) -> Result<(), &'static str> {
     let bitsize = |bi: &BigInt| (bi.bits() + 7) & (u64::MAX ^ 7);
     let n = f.coefficients.len();
     let size = [
@@ -102,12 +103,7 @@ pub fn babai_reduce_bigint(
             // does. It would be nice to fix that! But in order to fix it we need to be
             // able to reproduce it, and for that we need test vectors. So print them
             // and hope that one day they circle back to the implementor.
-            return Err(format!("Encountered infinite loop in babai_reduce of falcon-rust.\n\
-            Please help the developer(s) fix it! You can do this by sending them the inputs to the function that caused the behavior:\n\
-            f: {:?}\n\
-            g: {:?}\n\
-            capital_f: {:?}\n\
-            capital_g: {:?}\n", f.coefficients, g.coefficients, capital_f.coefficients, capital_g.coefficients));
+            return Err("Encountered infinite loop in babai_reduce of falcon-rust");
         }
     }
     Ok(())
@@ -132,7 +128,7 @@ pub fn babai_reduce_i32(
     g: &Polynomial<i32>,
     capital_f: &mut Polynomial<i32>,
     capital_g: &mut Polynomial<i32>,
-) -> Result<(), String> {
+) -> Result<(), &'static str> {
     let f_ntt: Polynomial<U32Field> = f.map(|&i| U32Field::new(i)).fft();
     let g_ntt: Polynomial<U32Field> = g.map(|&i| U32Field::new(i)).fft();
 
@@ -221,12 +217,7 @@ pub fn babai_reduce_i32(
             // does. It would be nice to fix that! But in order to fix it we need to be
             // able to reproduce it, and for that we need test vectors. So print them
             // and hope that one day they circle back to the implementor.
-            return Err(format!("Encountered infinite loop in babai_reduce of falcon-rust.\n\\
-            Please help the developer(s) fix it! You can do this by sending them the inputs to the function that caused the behavior:\n\\
-            f: {:?}\n\\
-            g: {:?}\n\\
-            capital_f: {:?}\n\\
-            capital_g: {:?}\n", f.coefficients, g.coefficients, capital_f.coefficients, capital_g.coefficients));
+            return Err("Encountered infinite loop in babai_reduce of falcon-rust");
         }
     }
     Ok(())
@@ -492,7 +483,7 @@ fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
 #[cfg(test)]
 mod test {
 
-    use std::str::FromStr;
+    use core::str::FromStr;
 
     use itertools::Itertools;
     use num::{BigInt, FromPrimitive};
@@ -697,10 +688,10 @@ mod test {
         let mut rng: StdRng = SeedableRng::from_seed(seed);
         let (f, g, capital_f, capital_g) = ntru_gen(n, &mut rng);
 
-        println!("f: {}", f);
-        println!("g: {}", g);
-        println!("capital f: {}", capital_f);
-        println!("capital g: {}", capital_g);
+        // println!("f: {}", f);
+        // println!("g: {}", g);
+        // println!("capital f: {}", capital_f);
+        // println!("capital g: {}", capital_g);
         let f_times_capital_g = (f * capital_g).reduce_by_cyclotomic(n);
         let g_times_capital_f = (g * capital_f).reduce_by_cyclotomic(n);
         let difference = f_times_capital_g - g_times_capital_f;

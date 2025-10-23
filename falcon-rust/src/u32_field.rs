@@ -1,10 +1,6 @@
-use std::fmt::Display;
-use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
-
-use rand_distr::{
-    num_traits::{One, Zero},
-    Distribution, Standard,
-};
+use core::fmt::Display;
+use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
+use num::{One, Zero};
 
 use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
@@ -116,14 +112,8 @@ impl One for U32Field {
     }
 }
 
-impl Distribution<U32Field> for Standard {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> U32Field {
-        U32Field::new(((rng.next_u32() >> 1) % Q) as i32)
-    }
-}
-
 impl Display for U32Field {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("{}", self.value()))
     }
 }
@@ -173,9 +163,11 @@ impl CyclotomicFourier for U32Field {
 
 #[cfg(test)]
 mod test {
+    use alloc::vec;
     use itertools::Itertools;
     use num::One;
-    use rand::{thread_rng, Rng, RngCore};
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::{RngCore, SeedableRng};
 
     use crate::{
         cyclotomic_fourier::CyclotomicFourier,
@@ -187,7 +179,8 @@ mod test {
 
     #[test]
     fn test_value() {
-        let mut rng = thread_rng();
+        let seed = [0u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         for _ in 0..1000 {
             let mut value = (rng.next_u32() & 0x3fff) as i32;
             if rng.next_u32() % 2 == 1 {
@@ -205,7 +198,8 @@ mod test {
 
     #[test]
     fn test_add() {
-        let mut rng = thread_rng();
+        let seed = [1u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let a_value = (rng.next_u32() % 0x0fff) as i32;
         let b_value = (rng.next_u32() % 0x0fff) as i32;
         let a = U32Field::new(a_value);
@@ -220,7 +214,8 @@ mod test {
 
     #[test]
     fn test_mul() {
-        let mut rng = thread_rng();
+        let seed = [2u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         for _ in 0..1000 {
             let a_value = (rng.next_u32() % 0x3fff) as i32;
             let b_value = (rng.next_u32() % 0x3fff) as i32;
@@ -239,8 +234,13 @@ mod test {
 
     #[test]
     fn test_batch_inverse() {
-        let mut rng = thread_rng();
-        let a: [U32Field; 64] = (0..64).map(|_| rng.gen()).collect_vec().try_into().unwrap();
+        let seed = [3u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
+        let a: [U32Field; 64] = (0..64)
+            .map(|_| U32Field::new((rng.next_u32() % Q) as i32))
+            .collect_vec()
+            .try_into()
+            .unwrap();
         let b_batch = U32Field::batch_inverse_or_zero(&a);
         let b_regular = a.iter().map(|e| e.inverse_or_zero()).collect_vec();
         assert_eq!(b_batch.to_vec(), b_regular);
@@ -248,8 +248,9 @@ mod test {
 
     #[test]
     fn test_inverse() {
-        let mut rng = thread_rng();
-        let a: U32Field = rng.gen();
+        let seed = [4u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
+        let a: U32Field = U32Field::new((rng.next_u32() % Q) as i32);
         let b = a.inverse_or_zero();
 
         assert_eq!(a * b * a, a);
@@ -288,7 +289,8 @@ mod test {
     #[test]
     fn test_ntt() {
         let n = 32;
-        let mut rng = thread_rng();
+        let seed = [5u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let mut a = (0..n)
             .map(|_| rng.next_u32() as i32)
             .map(U32Field::new)
@@ -327,12 +329,13 @@ mod test {
     #[test]
     fn test_multiply_reduce() {
         let n = 32;
-        let mut rng = thread_rng();
+        let seed = [6u8; 32];
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let mut a = (0..n)
-            .map(|_| U32Field::new(rng.gen_range(-20..20)))
+            .map(|_| U32Field::new(((rng.next_u32() % 41) as i32) - 20))
             .collect_vec();
         let mut b = (0..n)
-            .map(|_| U32Field::new(rng.gen_range(-20..20)))
+            .map(|_| U32Field::new(((rng.next_u32() % 41) as i32) - 20))
             .collect_vec();
 
         let c = (Polynomial::new(a.clone()) * Polynomial::new(b.clone()))
