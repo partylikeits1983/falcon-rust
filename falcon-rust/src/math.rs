@@ -425,17 +425,24 @@ pub fn ntru_gen(
 /// Generate a polynomial of degree at most n-1 whose coefficients are
 /// distributed according to a discrete Gaussian with mu = 0 and
 /// sigma = 1.17 * sqrt(Q / (2n)).
-// fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
+///
+/// Memory-optimized version: generates only the required number of samples
+/// instead of always allocating 4096 coefficients.
 fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
     let mu = 0.0;
     let sigma_star = 1.43300980528773;
-    const NUM_COEFFICIENTS: usize = 4096;
+    // Maintain same statistical distribution by sampling multiple values per coefficient
+    const BASE_SAMPLES: usize = 4096;
+    let samples_per_coeff = BASE_SAMPLES / n;
+
     Polynomial {
-        coefficients: (0..NUM_COEFFICIENTS)
-            .map(|_| sampler_z(mu, sigma_star, sigma_star - 0.001, rng))
-            .collect_vec()
-            .chunks(NUM_COEFFICIENTS / n)
-            .map(|ch| ch.iter().sum())
+        coefficients: (0..n)
+            .map(|_| {
+                // Sum multiple samples to maintain the same distribution
+                (0..samples_per_coeff)
+                    .map(|_| sampler_z(mu, sigma_star, sigma_star - 0.001, rng))
+                    .sum()
+            })
             .collect_vec(),
     }
 }
@@ -450,30 +457,39 @@ fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
     let norm_g_squared = g.l2_norm_squared();
     let gamma1 = norm_f_squared + norm_g_squared;
 
+    // Use stack-based computation for norm calculations to avoid heap allocations
     let f_fft = f.map(|i| Complex64::new(*i as f64, 0.0)).fft();
     let g_fft = g.map(|i| Complex64::new(*i as f64, 0.0)).fft();
-    let f_adj_fft = f_fft.map(|c| c.conj());
-    let g_adj_fft = g_fft.map(|c| c.conj());
-    let ffgg_fft = f_fft.hadamard_mul(&f_adj_fft) + g_fft.hadamard_mul(&g_adj_fft);
-    let ffgg_fft_inverse = ffgg_fft.hadamard_inv();
-    let qf_over_ffgg_fft = f_adj_fft
-        .map(|c| c * (Q as f64))
-        .hadamard_mul(&ffgg_fft_inverse);
-    let qg_over_ffgg_fft = g_adj_fft
-        .map(|c| c * (Q as f64))
-        .hadamard_mul(&ffgg_fft_inverse);
-    let norm_f_over_ffgg_squared = qf_over_ffgg_fft
-        .coefficients
-        .iter()
-        .map(|c| (c * c.conj()).re)
-        .sum::<f64>()
-        / (n as f64);
-    let norm_g_over_ffgg_squared = qg_over_ffgg_fft
-        .coefficients
-        .iter()
-        .map(|c| (c * c.conj()).re)
-        .sum::<f64>()
-        / (n as f64);
+
+    // Compute norms directly without intermediate allocations
+    let mut norm_f_over_ffgg_squared = 0.0;
+    let mut norm_g_over_ffgg_squared = 0.0;
+
+    for i in 0..n {
+        let f_val = f_fft.coefficients[i];
+        let g_val = g_fft.coefficients[i];
+        let f_conj = f_val.conj();
+        let g_conj = g_val.conj();
+
+        // ffgg = f * f_conj + g * g_conj
+        let ffgg = (f_val * f_conj + g_val * g_conj).re;
+
+        if ffgg != 0.0 {
+            let ffgg_inv = 1.0 / ffgg;
+            let q_f64 = Q as f64;
+
+            // qf_over_ffgg = (q * f_conj) / ffgg
+            let qf_over_ffgg = f_conj * (q_f64 * ffgg_inv);
+            norm_f_over_ffgg_squared += (qf_over_ffgg * qf_over_ffgg.conj()).re;
+
+            // qg_over_ffgg = (q * g_conj) / ffgg
+            let qg_over_ffgg = g_conj * (q_f64 * ffgg_inv);
+            norm_g_over_ffgg_squared += (qg_over_ffgg * qg_over_ffgg.conj()).re;
+        }
+    }
+
+    norm_f_over_ffgg_squared /= n as f64;
+    norm_g_over_ffgg_squared /= n as f64;
 
     let gamma2 = norm_f_over_ffgg_squared + norm_g_over_ffgg_squared;
 
