@@ -504,7 +504,7 @@ pub fn sign_with_rng<const N: usize>(
         let maybe_s = compress(
             &s2.coefficients
                 .iter()
-                .map(|a| a.re.round() as i16)
+                .map(|a| libm::round(a.re) as i16)
                 .collect_vec(),
             sig_bytelen_minus_41,
         );

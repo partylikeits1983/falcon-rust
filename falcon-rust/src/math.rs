@@ -83,7 +83,7 @@ pub fn babai_reduce_bigint(
             + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
-        let k = quotient.map(|f| Into::<BigInt>::into(f.re.round() as i64));
+        let k = quotient.map(|f| Into::<BigInt>::into(libm::round(f.re) as i64));
 
         if k.is_zero() {
             break;
@@ -195,7 +195,9 @@ pub fn babai_reduce_i32(
             + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
-        let k_ntt = quotient.map(|f| U32Field::new(f.re.round() as i32)).fft();
+        let k_ntt = quotient
+            .map(|f| U32Field::new(libm::round(f.re) as i32))
+            .fft();
 
         if k_ntt.is_zero() {
             break;

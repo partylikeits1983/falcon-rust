@@ -341,12 +341,13 @@ impl<
 impl<F: Clone + Into<f64>> Polynomial<F> {
     #[allow(dead_code)]
     pub(crate) fn l2_norm(&self) -> f64 {
-        self.coefficients
-            .iter()
-            .map(|i| Into::<f64>::into(i.clone()))
-            .map(|i| i * i)
-            .sum::<f64>()
-            .sqrt()
+        libm::sqrt(
+            self.coefficients
+                .iter()
+                .map(|i| Into::<f64>::into(i.clone()))
+                .map(|i| i * i)
+                .sum::<f64>(),
+        )
     }
     pub(crate) fn l2_norm_squared(&self) -> f64 {
         self.coefficients

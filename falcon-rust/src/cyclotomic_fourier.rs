@@ -213,7 +213,7 @@ where
 impl CyclotomicFourier for Complex64 {
     fn primitive_root_of_unity(n: usize) -> Self {
         let angle = 2. * PI / (n as f64);
-        Complex64::new(f64::cos(angle), f64::sin(angle))
+        Complex64::new(libm::cos(angle), libm::sin(angle))
     }
 
     /// Custom implementation of CyclotomicFourier::bitreversed_powers for
@@ -223,7 +223,7 @@ impl CyclotomicFourier for Complex64 {
         let half_circle = PI;
         for (i, a) in array.iter_mut().enumerate() {
             let angle = (i as f64) * half_circle / (n as f64);
-            *a = Self::new(f64::cos(angle), f64::sin(angle));
+            *a = Self::new(libm::cos(angle), libm::sin(angle));
         }
         Self::bitreverse_array(&mut array);
         array
@@ -236,7 +236,7 @@ impl CyclotomicFourier for Complex64 {
         let half_circle = PI;
         for (i, a) in array.iter_mut().enumerate() {
             let angle = (i as f64) * half_circle / (n as f64);
-            *a = Self::new(f64::cos(angle), -f64::sin(angle));
+            *a = Self::new(libm::cos(angle), -libm::sin(angle));
         }
         Self::bitreverse_array(&mut array);
         array
